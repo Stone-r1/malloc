@@ -5,6 +5,7 @@
 typedef struct __node_t {
     size_t segmentSize;
     struct __node_t *next;
+    struct __node_t *prev;
 } node_t;
 
 // Header of the allocated segment
@@ -21,6 +22,7 @@ void freeList_init(size_t size, void *ptr) {
     freeList = (node_t *)ptr;
     freeList->segmentSize = size - sizeof(node_t);
     freeList->next = NULL;
+    freeList->prev = NULL;
 }
 
 node_t *findSegment(size_t size) {
@@ -37,8 +39,52 @@ node_t *findSegment(size_t size) {
     return bestMatch->segmentSize < size ? NULL : bestMatch;
 }
 
+// If it's too big or equal to the size + sizeof(node) that means:
+// 1 - Remove the node entirely as it is a perfect fit with no remainder
+// 2 - Split it and leave the free part in the list
+void splitSegment(node_t *block, size_t size) {
+    size_t actualSize = size + sizeof(header_t);
+    size_t originalSize = block->segmentSize;
+
+    header_t *header = (header_t *)block;
+    header->segmentSize = size;
+
+    node_t *newNode = (node_t *)((char *)block + actualSize);
+    newNode->segmentSize = originalSize - actualSize;
+
+    newNode->next = block->next;
+    newNode->prev = block->prev;
+
+    if (block->prev != NULL) {
+        block->prev->next = newNode;
+    } else {
+        freeList = newNode;
+    }
+}
+
+// If free segment size is more than size but less than size + sizeof(node)
+// Sacrifice the remainding space, but keep the allocation
+void takeSegment(node_t *block, size_t size) {
+    if (block->prev != NULL) {
+        block->prev->next = block->next;
+    } else {
+        freeList = block->next;
+    }
+
+    if (block->next != NULL) {
+        block->next->prev = block->prev;
+    }
+
+    header_t *header = (header_t *)block;
+    header->segmentSize = size;
+}
+
 void manageFreeList(node_t *block, size_t size) {
-    return;
+    if (block->segmentSize >= size + sizeof(node_t)) {
+        splitSegment(block, size);
+    } else {
+        takeSegment(block, size);
+    }
 }
 
 
@@ -62,19 +108,15 @@ void *mmalloc_init(size_t size) {
 // Change the value from free list
 // return pointer to the memory (not header)
 void *mmalloc(size_t size) {
-    size_t actualSize = size + sizeof(header_t);
-    node_t *block = findSegment(actualSize);
-
+    node_t *block = findSegment(size + sizeof(header_t));
 
     if (block == NULL) {
         perror("Couldn't find the segment of the requested size");
         return NULL;
     }
 
-    manageFreeList(block, actualSize);
+    manageFreeList(block, size);
     header_t *header = (header_t *)block;
-    header->segmentSize = size;
-
     return (void *)((char *)header + sizeof(header_t));
 }
 
@@ -88,6 +130,10 @@ int main() {
     printf("Future Malloc!\n");
 
     mmalloc_init(4096);
-    printf("Allocated %zu KB of memory!\n", freeList->segmentSize);
+    printf("Allocated %zu Bytes of memory!\n", freeList->segmentSize);
+
+    mmalloc(50);
+    printf("Allocated %d Bytes of memory\n", 50);
+    printf("Currently there is %zu Bytes of memory free!\n", freeList->segmentSize);
     return 0;
 }
