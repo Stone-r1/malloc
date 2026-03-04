@@ -29,7 +29,7 @@ node_t *findSegment(size_t size) {
     node_t *bestMatch = freeList;
     node_t *cur = freeList;
 
-    while (cur != NULL) {
+    while (cur) {
         if (cur->segmentSize >= size && cur->segmentSize <= bestMatch->segmentSize) {
             bestMatch = cur;
         }
@@ -55,8 +55,10 @@ void splitSegment(node_t *block, size_t size) {
     newNode->next = block->next;
     newNode->prev = block->prev;
 
-    if (block->prev != NULL) {
+    if (block->prev) {
         block->prev->next = newNode;
+    } else if (block->next) {
+        block->next->prev = newNode;
     } else {
         freeList = newNode;
     }
@@ -65,13 +67,13 @@ void splitSegment(node_t *block, size_t size) {
 // If free segment size is more than size but less than size + sizeof(node)
 // Sacrifice the remainding space, but keep the allocation
 void takeSegment(node_t *block, size_t size) {
-    if (block->prev != NULL) {
+    if (block->prev) {
         block->prev->next = block->next;
     } else {
         freeList = block->next;
     }
 
-    if (block->next != NULL) {
+    if (block->next) {
         block->next->prev = block->prev;
     }
 
@@ -84,6 +86,62 @@ void manageFreeList(node_t *block, size_t size) {
         splitSegment(block, size);
     } else {
         takeSegment(block, size);
+    }
+}
+
+node_t *insertNode(void *ptr) {
+    header_t *header = (header_t *)((char *)ptr - sizeof(header_t));
+    size_t segmentSize = header->segmentSize + sizeof(header_t);
+
+    node_t *node = (node_t *)header;
+    node->segmentSize = segmentSize;
+    node->next = NULL;
+    node->prev = NULL;
+
+    node_t *cur = freeList;
+    node_t *prev = NULL;
+    
+    while (cur && cur < node) {
+        prev = cur;
+        cur = cur->next;
+    }
+
+    node->next = cur;
+    node->prev = prev;
+
+    if (cur) {
+        cur->prev = node;
+    } else if (prev) {
+        prev->next = node;
+    } else {
+        freeList = node;
+    }
+
+    return node;
+}
+
+void coalesceSegments(node_t *node) {
+    node_t *prev = node->prev;
+    node_t *next = node->next;
+
+    if (prev && (char *)prev + prev->segmentSize == (char *)node) {
+        prev->segmentSize += node->segmentSize;
+        prev->next = node->next;
+
+        if (node->next) {
+            prev->next->prev = prev;
+        }
+
+        node = prev;
+    }
+
+    if (next && (char *)node + node->segmentSize == (char *)next) {
+        node->segmentSize += next->segmentSize;
+        node->next = next->next;
+
+        if (next->next) {
+            next->next->prev = node;
+        }
     }
 }
 
@@ -110,7 +168,7 @@ void *mmalloc_init(size_t size) {
 void *mmalloc(size_t size) {
     node_t *block = findSegment(size + sizeof(header_t));
 
-    if (block == NULL) {
+    if (!block) {
         perror("Couldn't find the segment of the requested size");
         return NULL;
     }
@@ -120,10 +178,17 @@ void *mmalloc(size_t size) {
     return (void *)((char *)header + sizeof(header_t));
 }
 
+// Clear the chunk
+// Add it to the free list
+// Coalesce free chunk if possible
 void free(void *ptr) {
-    // Clear the chunk
-    // Add it to the free list
-    // Coalesce free chunk if possible
+    if (!ptr) {
+        perror("free() takes a pointer to the previously allocated space");
+        return; 
+    }
+
+    node_t *node = insertNode(ptr);
+    coalesceSegments(node);
 }
 
 int main() {
@@ -134,6 +199,13 @@ int main() {
 
     mmalloc(50);
     printf("Allocated %d Bytes of memory\n", 50);
+    printf("Currently there is %zu Bytes of memory free!\n", freeList->segmentSize);
+
+    void *tmp = mmalloc(500);
+    printf("Allocated %d Bytes of memory\n", 500);
+    printf("Currently there is %zu Bytes of memory free!\n", freeList->segmentSize);
+
+    free(tmp);
     printf("Currently there is %zu Bytes of memory free!\n", freeList->segmentSize);
     return 0;
 }
